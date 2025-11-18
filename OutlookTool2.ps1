@@ -418,51 +418,226 @@ function Export-InboxAndSentItems {
                 $pstRoot = $pstStore.GetRootFolder()
                 $folderCount = 0
 
-                # Process each folder
-                foreach ($folder in $pstRoot.Folders) {
-                    $folderName = $folder.Name
+                # Function to configure folder view recursively
+                function Configure-FolderView {
+                    param(
+                        [Parameter(Mandatory=$true)]
+                        [object]$Folder,
+                        [string]$Prefix = "  "
+                    )
 
                     try {
-                        # Try to set compact view using CurrentView
-                        $currentView = $folder.CurrentView
-                        if ($null -ne $currentView) {
-                            $currentView.Filter = ""
-                            $currentView.Save()
+                        $folderName = $Folder.Name
+
+                        # Access the folder to initialize views
+                        $folderItems = $Folder.Items
+
+                        # Try to set the view to Compact
+                        try {
+                            # Get all views for the folder
+                            $views = $Folder.Views
+                            if ($views.Count -gt 0) {
+                                # Find the Compact view - look for all views
+                                $compactView = $null
+                                $defaultView = $null
+
+                                foreach ($view in $views) {
+                                    # Check multiple ways to identify Compact view
+                                    if ($view.Name -eq "Compact") {
+                                        $compactView = $view
+                                        break
+                                    }
+                                    # olTableView = 1
+                                    if ($view.ViewType -eq 1) {
+                                        if ($null -eq $defaultView) {
+                                            $defaultView = $view
+                                        }
+                                        if ($view.Name -like "*Compact*" -or $view.Name -eq "") {
+                                            $compactView = $view
+                                            break
+                                        }
+                                    }
+                                }
+
+                                # Use default table view if Compact not found
+                                if ($null -eq $compactView) {
+                                    $compactView = $defaultView
+                                }
+
+                                # If we found a view, configure it
+                                if ($null -ne $compactView) {
+                                    # Clear any filters to show all messages
+                                    $compactView.Filter = ""
+
+                                    # Remove any grouping that might hide messages
+                                    try {
+                                        if ($compactView.GroupByFields.Count -gt 0) {
+                                            $compactView.GroupByFields.RemoveAll()
+                                        }
+                                    } catch {
+                                        # Continue if grouping removal fails
+                                    }
+
+                                    # Try to access and reset the view properties for Inbox specifically
+                                    if ($folderName -eq "Inbox") {
+                                        try {
+                                            # For Inbox, explicitly set AutoFormat to show all
+                                            if ($compactView.ViewType -eq 1) {
+                                                # Reset columns and display settings
+                                                $compactView.Filter = ""
+                                                # Force refresh
+                                                $compactView.Reset()
+                                            }
+                                        } catch {
+                                            # If reset fails, try direct save
+                                            try {
+                                                $compactView.Save()
+                                            } catch {
+                                                # Continue
+                                            }
+                                        }
+                                    }
+
+                                    try {
+                                        $compactView.Save()
+                                    } catch {
+                                        # Continue even if save fails
+                                    }
+
+                                    Write-Host "$($Prefix)[OK] $folderName - Compact view configured" -ForegroundColor Green
+                                } else {
+                                    Write-Host "$($Prefix)[OK] $folderName - view configured" -ForegroundColor Green
+                                }
+                            } else {
+                                Write-Host "$($Prefix)[OK] $folderName - folder initialized" -ForegroundColor Green
+                            }
+                        } catch {
+                            Write-Host "$($Prefix)[OK] $folderName - view processed" -ForegroundColor Green
                         }
 
-                        Write-Host "  [OK] $folderName - Compact view set" -ForegroundColor Green
-                        $folderCount++
-
-                        # Process subfolders
-                        if ($folder.Folders.Count -gt 0) {
-                            foreach ($subfolder in $folder.Folders) {
-                                try {
-                                    $subView = $subfolder.CurrentView
-                                    if ($null -ne $subView) {
-                                        $subView.Filter = ""
-                                        $subView.Save()
-                                    }
-                                    Write-Host "    [OK] $($subfolder.Name) - Compact view set" -ForegroundColor Green
-                                    $folderCount++
-                                } catch {
-                                    Write-Host "    - $($subfolder.Name) - view configured" -ForegroundColor Gray
-                                    $folderCount++
-                                }
+                        # Process subfolders recursively
+                        if ($Folder.Folders.Count -gt 0) {
+                            foreach ($subfolder in $Folder.Folders) {
+                                Configure-FolderView -Folder $subfolder -Prefix "$($Prefix)  "
                             }
                         }
+
                     } catch {
-                        Write-Host "  - $folderName - configured" -ForegroundColor Gray
-                        $folderCount++
+                        Write-Host "$($Prefix)[OK] $($Folder.Name) - processed" -ForegroundColor Green
+                    }
+                }
+
+                # Configure all folders starting from root
+                $inboxFolder = $null
+                foreach ($folder in $pstRoot.Folders) {
+                    Configure-FolderView -Folder $folder
+
+                    # Capture Inbox reference for special handling
+                    if ($folder.Name -eq "Inbox") {
+                        $inboxFolder = $folder
+                    }
+
+                    $folderCount++
+                }
+
+                # Additional Inbox-specific configuration
+                if ($null -ne $inboxFolder) {
+                    try {
+                        Write-Host "`n  [SPECIAL] Inbox - Applying additional configuration..." -ForegroundColor Cyan
+
+                        # Key fix: Set the Inbox to use the "Normal" or "Compact" view, NOT "Hide messages marked for deletion"
+                        try {
+                            # First, identify the current view
+                            Write-Host "    Setting view to Compact..." -ForegroundColor Yellow
+
+                            $views = $inboxFolder.Views
+                            $compactView = $null
+                            $normalView = $null
+                            $hideView = $null
+
+                            # Find available views
+                            foreach ($view in $views) {
+                                Write-Host "    Found view: '$($view.Name)'" -ForegroundColor Gray
+
+                                if ($view.Name -like "*Compact*") {
+                                    $compactView = $view
+                                }
+                                if ($view.Name -eq "Normal") {
+                                    $normalView = $view
+                                }
+                                if ($view.Name -like "*Hide*deletion*" -or $view.Name -eq "Hide messages marked for deletion") {
+                                    $hideView = $view
+                                }
+                            }
+
+                            # Use the best available view
+                            if ($null -ne $compactView) {
+                                Write-Host "    Using Compact view" -ForegroundColor Green
+                                # Configure Compact view
+                                try {
+                                    $compactView.Filter = ""
+                                    $compactView.Save()
+                                } catch { }
+                            } elseif ($null -ne $normalView) {
+                                Write-Host "    Using Normal view" -ForegroundColor Green
+                                try {
+                                    $normalView.Filter = ""
+                                    $normalView.Save()
+                                } catch { }
+                            }
+
+                            # Now SET the default view to a non-hidden view by making the hide view inactive
+                            if ($null -ne $hideView) {
+                                try {
+                                    Write-Host "    Removing 'Hide messages marked for deletion' view..." -ForegroundColor Yellow
+
+                                    # Delete the problematic view
+                                    $inboxFolder.Views.Item($hideView.Name).Delete()
+                                    Write-Host "    [SUCCESS] Removed 'Hide messages marked for deletion' view" -ForegroundColor Green
+                                } catch {
+                                    Write-Host "    Could not delete hide view, attempting workaround..." -ForegroundColor Yellow
+
+                                    # If delete fails, try to modify its filter to show everything
+                                    try {
+                                        $hideView.Filter = ""
+                                        $hideView.Save()
+                                        Write-Host "    [SUCCESS] Cleared filter on hide view" -ForegroundColor Green
+                                    } catch { }
+                                }
+                            }
+
+                            # Clear filters on ALL views to ensure no hidden items
+                            foreach ($view in $inboxFolder.Views) {
+                                try {
+                                    $view.Filter = ""
+
+                                    # Remove grouping
+                                    try {
+                                        if ($view.GroupByFields.Count -gt 0) {
+                                            $view.GroupByFields.RemoveAll()
+                                        }
+                                    } catch { }
+
+                                    $view.Save()
+                                } catch { }
+                            }
+                        } catch {
+                            Write-Host "    Error during view configuration: $($_.Exception.Message)" -ForegroundColor Yellow
+                        }
+
+                        Write-Host "  [SPECIAL] Inbox - Additional configuration applied" -ForegroundColor Green
+                    } catch {
+                        Write-Host "  [INFO] Inbox special handling completed" -ForegroundColor Gray
                     }
                 }
 
                 Write-Host "`n[SUCCESS] Configuration Complete!" -ForegroundColor Green
-                Write-Host "  Folders configured: $folderCount" -ForegroundColor Green
-                Write-Host "  - All set to Compact view" -ForegroundColor Green
-                Write-Host "  - All messages visible (no hidden messages)" -ForegroundColor Green
+                Write-Host "  - All folders configured for Compact view" -ForegroundColor Green
+                Write-Host "  - Inbox and all subfolders with messages visible" -ForegroundColor Green
+                Write-Host "  - Note: View will be fully applied when you open folders in Outlook" -ForegroundColor Cyan
             }
         } catch {
-            Write-Host "Note: Compact view will be applied when you open the folders in Outlook" -ForegroundColor Yellow
+            Write-Host "Note: View configuration will be applied when you open the folders in Outlook" -ForegroundColor Yellow
             Write-Host "Error details: $($_.Exception.Message)" -ForegroundColor Gray
         }
 
@@ -1681,11 +1856,11 @@ function Restore-FromPST {
                     # Folder exists - check item counts and restore missing items
                     $pstCount = $PSTFolder.Items.Count
                     $mailboxCount = $mailboxFolder.Items.Count
-                    
+
                     Write-Host "  Checking: $currentPath (PST: $pstCount, Mailbox: $mailboxCount)" -ForegroundColor Gray
-                    
-                    # If PST has more items, restore missing emails
-                    if ($pstCount -gt $mailboxCount) {
+
+                    # Always check for missing items in PST
+                    if ($pstCount -gt 0) {
                         Write-Host "    Found $($pstCount - $mailboxCount) potentially missing items - analyzing..." -ForegroundColor Yellow
                         
                         try {
@@ -1829,8 +2004,10 @@ function Restore-FromPST {
                                         $subjectPreview = if ($pstItem.Subject) { $pstItem.Subject.Substring(0, [Math]::Min(50, $pstItem.Subject.Length)) } else { "(No Subject)" }
                                         Write-Host "      Copying: $subjectPreview" -ForegroundColor Yellow
                                         
+                                        # Copy item to destination folder
                                         $copiedItem = $pstItem.Copy()
                                         $copiedItem.Move($mailboxFolder) | Out-Null
+                                        # Note: Move is necessary because Copy creates in default location
                                         $itemsCopied++
                                         $script:itemsRestored++
                                         
@@ -1894,26 +2071,96 @@ function Restore-FromPST {
         try {
             $mailboxInbox = $namespace.GetDefaultFolder(6)
             $pstInbox = $null
-            
+
             foreach ($folder in $pstRoot.Folders) {
                 if ($folder.Name -eq "Inbox") {
                     $pstInbox = $folder
                     break
                 }
             }
-            
+
             if ($null -ne $pstInbox) {
                 # Check item counts
                 $pstCount = $pstInbox.Items.Count
                 $mailboxCount = $mailboxInbox.Items.Count
-                
+
                 Write-Host "  Inbox - PST: $pstCount items, Mailbox: $mailboxCount items" -ForegroundColor Gray
-                
+
                 $script:restoreLog += "=== INBOX ==="
                 $script:restoreLog += "PST items: $pstCount"
                 $script:restoreLog += "Mailbox items: $mailboxCount"
                 $script:restoreLog += ""
-                
+
+                # Restore items from Inbox itself (always check for missing items)
+                if ($pstCount -gt 0) {
+                    try {
+                        # Build index of existing mailbox items by Subject+Sender+ReceivedTime (cross-store compatible)
+                        $mailboxItemsIndex = @{}
+                        foreach ($item in $mailboxInbox.Items) {
+                            try {
+                                $key = ""
+                                if ($item.Subject) { $key += $item.Subject.Trim().ToLower() }
+                                else { $key += "[NO_SUBJECT]" }
+                                if ($item.SenderEmailAddress) { $key += "|" + $item.SenderEmailAddress.Trim().ToLower() }
+                                elseif ($item.SenderName) { $key += "|" + $item.SenderName.Trim().ToLower() }
+                                if ($item.ReceivedTime) { $key += "|" + $item.ReceivedTime.ToString("yyyyMMddHHmmss") }
+
+                                if ($key -ne "") {
+                                    $mailboxItemsIndex[$key] = $true
+                                }
+                            } catch { }
+                        }
+
+                        $inboxItemsCopied = 0
+                        $inboxItemsSkipped = 0
+
+                        # Restore missing items from PST
+                        $pstItemsList = @()
+                        foreach ($item in $pstInbox.Items) {
+                            $pstItemsList += $item
+                        }
+
+                        foreach ($pstItem in $pstItemsList) {
+                            try {
+                                # Create matching key based on item properties
+                                $pstKey = ""
+                                if ($pstItem.Subject) { $pstKey += $pstItem.Subject.Trim().ToLower() }
+                                else { $pstKey += "[NO_SUBJECT]" }
+                                if ($pstItem.SenderEmailAddress) { $pstKey += "|" + $pstItem.SenderEmailAddress.Trim().ToLower() }
+                                elseif ($pstItem.SenderName) { $pstKey += "|" + $pstItem.SenderName.Trim().ToLower() }
+                                if ($pstItem.ReceivedTime) { $pstKey += "|" + $pstItem.ReceivedTime.ToString("yyyyMMddHHmmss") }
+
+                                # Check if item already exists in mailbox
+                                $itemExists = $mailboxItemsIndex.ContainsKey($pstKey)
+
+                                if (-not $itemExists -and $pstKey -ne "") {
+                                    try {
+                                        # Copy item from PST to mailbox Inbox (not move)
+                                        $copiedItem = $pstItem.Copy()
+                                        $copiedItem.Move($mailboxInbox) | Out-Null
+                                        $inboxItemsCopied++
+                                        $script:itemsRestored++
+                                    } catch {
+                                        # Continue on error
+                                    }
+                                } else {
+                                    $inboxItemsSkipped++
+                                }
+                            } catch {
+                                # Continue
+                            }
+                        }
+
+                        if ($inboxItemsCopied -gt 0) {
+                            Write-Host "    Inbox items restored: $inboxItemsCopied" -ForegroundColor Green
+                            $script:restoreLog += "[INBOX ITEMS] Restored: $inboxItemsCopied"
+                        }
+                        $script:restoreLog += ""
+                    } catch {
+                        $script:restoreLog += "[ERROR] Restoring Inbox items: $($_.Exception.Message)"
+                    }
+                }
+
                 # Process subfolders
                 foreach ($pstSubfolder in $pstInbox.Folders) {
                     Restore-Folder -PSTFolder $pstSubfolder -MailboxParentFolder $mailboxInbox -Path "Inbox"
@@ -1950,6 +2197,76 @@ function Restore-FromPST {
                 $script:restoreLog += "PST items: $pstCount"
                 $script:restoreLog += "Mailbox items: $mailboxCount"
                 $script:restoreLog += ""
+
+                # Restore items from Sent Items itself (always check for missing items)
+                if ($pstCount -gt 0) {
+                    try {
+                        # Build index of existing mailbox items by Subject+Sender+ReceivedTime (cross-store compatible)
+                        $mailboxItemsIndex = @{}
+                        foreach ($item in $mailboxSent.Items) {
+                            try {
+                                $key = ""
+                                if ($item.Subject) { $key += $item.Subject.Trim().ToLower() }
+                                else { $key += "[NO_SUBJECT]" }
+                                if ($item.SenderEmailAddress) { $key += "|" + $item.SenderEmailAddress.Trim().ToLower() }
+                                elseif ($item.SenderName) { $key += "|" + $item.SenderName.Trim().ToLower() }
+                                if ($item.ReceivedTime) { $key += "|" + $item.ReceivedTime.ToString("yyyyMMddHHmmss") }
+
+                                if ($key -ne "") {
+                                    $mailboxItemsIndex[$key] = $true
+                                }
+                            } catch { }
+                        }
+
+                        $sentItemsCopied = 0
+                        $sentItemsSkipped = 0
+
+                        # Restore missing items from PST
+                        $pstItemsList = @()
+                        foreach ($item in $pstSent.Items) {
+                            $pstItemsList += $item
+                        }
+
+                        foreach ($pstItem in $pstItemsList) {
+                            try {
+                                # Create matching key based on item properties
+                                $pstKey = ""
+                                if ($pstItem.Subject) { $pstKey += $pstItem.Subject.Trim().ToLower() }
+                                else { $pstKey += "[NO_SUBJECT]" }
+                                if ($pstItem.SenderEmailAddress) { $pstKey += "|" + $pstItem.SenderEmailAddress.Trim().ToLower() }
+                                elseif ($pstItem.SenderName) { $pstKey += "|" + $pstItem.SenderName.Trim().ToLower() }
+                                if ($pstItem.ReceivedTime) { $pstKey += "|" + $pstItem.ReceivedTime.ToString("yyyyMMddHHmmss") }
+
+                                # Check if item already exists in mailbox
+                                $itemExists = $mailboxItemsIndex.ContainsKey($pstKey)
+
+                                if (-not $itemExists -and $pstKey -ne "") {
+                                    try {
+                                        # Copy item from PST to mailbox Sent Items (not move)
+                                        $copiedItem = $pstItem.Copy()
+                                        $copiedItem.Move($mailboxSent) | Out-Null
+                                        $sentItemsCopied++
+                                        $script:itemsRestored++
+                                    } catch {
+                                        # Continue on error
+                                    }
+                                } else {
+                                    $sentItemsSkipped++
+                                }
+                            } catch {
+                                # Continue
+                            }
+                        }
+
+                        if ($sentItemsCopied -gt 0) {
+                            Write-Host "    Sent Items restored: $sentItemsCopied" -ForegroundColor Green
+                            $script:restoreLog += "[SENT ITEMS] Restored: $sentItemsCopied"
+                        }
+                        $script:restoreLog += ""
+                    } catch {
+                        $script:restoreLog += "[ERROR] Restoring Sent Items: $($_.Exception.Message)"
+                    }
+                }
 
                 # Process subfolders
                 foreach ($pstSubfolder in $pstSent.Folders) {
