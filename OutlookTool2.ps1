@@ -2891,13 +2891,11 @@ function Show-Menu {
     Write-Host "  Dualog Outlook Backup Utility ver 1.0" -ForegroundColor Cyan
     Write-Host "---------------------------------------------------" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "1. Export Inbox and Sent Items to PST" -ForegroundColor White
-    Write-Host "2. Verify & Compare PST with Mailbox" -ForegroundColor White
-    Write-Host "3. Restore Missing Folders/Emails from PST" -ForegroundColor White
-    Write-Host "4. View Backup Folder & Logs" -ForegroundColor White
-    Write-Host "5. Activate Renamed Outlook Mode" -ForegroundColor White
-    Write-Host "6. Check Outlook Mis-Sync Abnormality" -ForegroundColor White
-    Write-Host "7. Exit" -ForegroundColor White
+    Write-Host "1. Restore Missing Folders/Emails from PST" -ForegroundColor White
+    Write-Host "2. View Backup Folder & Logs" -ForegroundColor White
+    Write-Host "3. Activate Renamed Outlook Mode" -ForegroundColor White
+    Write-Host "4. Check Outlook Mis-Sync Abnormality" -ForegroundColor White
+    Write-Host "5. Exit" -ForegroundColor White
     Write-Host ""
     Write-Host "Backup Location: $script:backupFolder" -ForegroundColor Gray
     Write-Host ""
@@ -2906,35 +2904,29 @@ function Show-Menu {
 # Main menu loop
 do {
     Show-Menu
-    $choice = Read-Host "Select an option (1-7)"
-    
+    $choice = Read-Host "Select an option (1-5)"
+
     switch ($choice) {
         '1' {
             Clear-Host
-            Export-InboxAndSentItems
-        }
-        '2' {
-            Compare-PSTWithMailbox
-        }
-        '3' {
             Restore-FromPST
         }
-        '4' {
+        '2' {
             View-FoldersAndLogs
         }
-        '5' {
+        '3' {
             Manage-OutlookRenameMode
         }
-        '6' {
+        '4' {
             Check-OutlookMisSyncAbnormality
         }
-        '7' {
+        '5' {
             Write-Host "`nExiting..." -ForegroundColor Cyan
             break
         }
         default {
-            Write-Host "`nInvalid option. Please select 1-7." -ForegroundColor Red
+            Write-Host "`nInvalid option. Please select 1-5." -ForegroundColor Red
             Start-Sleep -Seconds 2
         }
     }
-} while ($choice -ne '7')
+} while ($choice -ne '5')
